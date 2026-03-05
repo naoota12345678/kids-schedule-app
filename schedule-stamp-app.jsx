@@ -347,7 +347,7 @@ export default function App() {
                     <div
                       onPointerDown={e=>canEdit&&onPtrDown(idx,e)}
                       onPointerEnter={()=>canEdit&&onPtrEnter(idx)}
-                      style={{ display:"flex", alignItems:"stretch", borderBottom:isHour?"1px solid #ddd8ff":"1px solid #f0eeff", background:stamp?(isMeal?MEAL_STAMP.color+"dd":stamp.color+"bb"):"transparent", cursor:isMeal?"not-allowed":canEdit?"crosshair":"default", touchAction:"none", minHeight:isHour?30:22 }}>
+                      style={{ display:"flex", alignItems:"stretch", borderBottom:isHour?"1px solid #ddd8ff":"1px solid #f0eeff", background:stamp?(isMeal?MEAL_STAMP.color+"dd":stamp.color+"bb"):"transparent", cursor:isMeal?"not-allowed":canEdit?"crosshair":"default", touchAction:"pan-y", minHeight:isHour?30:22 }}>
                       <div style={{ width:42, flexShrink:0, paddingLeft:8, display:"flex", alignItems:"center", fontSize:isHour?11:9, fontWeight:isHour?800:400, color:isHour?"#5b3fc4":"#ccc", fontVariantNumeric:"tabular-nums" }}>
                         {isHour?fmt(slot.hour,slot.min):`▪ ${String(slot.min).padStart(2,"0")}`}
                       </div>
