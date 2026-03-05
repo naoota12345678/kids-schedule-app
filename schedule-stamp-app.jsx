@@ -1,4 +1,77 @@
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect, useCallback } from "react";
+import { db } from "./src/firebase.js";
+import { doc, setDoc, onSnapshot } from "firebase/firestore";
+
+// ── localStorage helpers ──────────────────────────────────────────────────
+const STORAGE_PREFIX = "kidsapp_";
+function loadJSON(key, fallback) {
+  try {
+    const raw = localStorage.getItem(STORAGE_PREFIX + key);
+    return raw ? JSON.parse(raw) : fallback;
+  } catch { return fallback; }
+}
+function saveJSON(key, value) {
+  try { localStorage.setItem(STORAGE_PREFIX + key, JSON.stringify(value)); } catch {}
+}
+function usePersist(key, fallback) {
+  const [val, setVal] = useState(() => loadJSON(key, fallback));
+  useEffect(() => { saveJSON(key, val); }, [key, val]);
+  return [val, setVal];
+}
+
+// ── Firestore sync helpers ────────────────────────────────────────────────
+function getFamilyCode() {
+  let code = localStorage.getItem(STORAGE_PREFIX + "familyCode");
+  if (!code) {
+    code = Math.random().toString(36).substring(2, 8).toUpperCase();
+    localStorage.setItem(STORAGE_PREFIX + "familyCode", code);
+  }
+  return code;
+}
+
+function useFirestoreSync(familyCode, dataMap) {
+  // dataMap: { key: [value, setter] }
+  const skipNextRemote = useRef({});
+
+  // Upload to Firestore when local data changes
+  useEffect(() => {
+    if (!familyCode) return;
+    const payload = {};
+    for (const [key, [value]] of Object.entries(dataMap)) {
+      payload[key] = JSON.parse(JSON.stringify(value));
+    }
+    const ref = doc(db, "families", familyCode);
+    setDoc(ref, payload, { merge: true }).catch(() => {});
+    // Mark that we just wrote, so we skip the next snapshot for these keys
+    for (const key of Object.keys(dataMap)) {
+      skipNextRemote.current[key] = true;
+    }
+  }, [...Object.entries(dataMap).map(([, [v]]) => v), familyCode]);
+
+  // Listen for remote changes
+  useEffect(() => {
+    if (!familyCode) return;
+    const ref = doc(db, "families", familyCode);
+    const unsub = onSnapshot(ref, (snap) => {
+      if (!snap.exists()) return;
+      const remote = snap.data();
+      for (const [key, [, setter]] of Object.entries(dataMap)) {
+        if (skipNextRemote.current[key]) {
+          skipNextRemote.current[key] = false;
+          continue;
+        }
+        if (remote[key] !== undefined) {
+          const remoteStr = JSON.stringify(remote[key]);
+          const localStr = JSON.stringify(loadJSON(key, null));
+          if (remoteStr !== localStr) {
+            setter(remote[key]);
+          }
+        }
+      }
+    });
+    return unsub;
+  }, [familyCode]);
+}
 
 // ── Stamps ─────────────────────────────────────────────────────────────────
 const STAMPS = [
@@ -74,17 +147,140 @@ function getBlockInfo(schedule, mealSlots, idx) {
   return { isStart: start===idx, startLabel: fmt(SLOTS[start].hour,SLOTS[start].min), endLabel: endSlot(end) };
 }
 
+// ── Notifications ────────────────────────────────────────────────────────
+function useNotifications(schedules, mealOverrides, defaultMeals) {
+  const notified = useRef(new Set());
+
+  useEffect(() => {
+    if (typeof Notification === "undefined") return;
+    const check = () => {
+      if (Notification.permission !== "granted") return;
+      const now = new Date();
+      const target = new Date(now.getTime() + 5 * 60 * 1000);
+      const h = target.getHours(), m = Math.floor(target.getMinutes() / 10) * 10;
+      const idx = SLOTS.findIndex(s => s.hour === h && s.min === m);
+      if (idx < 0) return;
+
+      const key = toKey(now);
+      const schedule = schedules[key] || {};
+      const meals = mealOverrides[key] || defaultMeals;
+      const mealSlots = buildMealSlots(meals);
+
+      const isMeal = mealSlots.has(idx);
+      const stampId = isMeal ? "meal" : schedule[idx];
+      if (!stampId) return;
+
+      const notifKey = `${key}-${idx}`;
+      if (notified.current.has(notifKey)) return;
+
+      // Only notify at the start of a block
+      const info = getBlockInfo(schedule, mealSlots, idx);
+      if (!info?.isStart) return;
+
+      const stamp = getS(stampId);
+      if (!stamp) return;
+
+      notified.current.add(notifKey);
+      const timeStr = fmt(SLOTS[idx].hour, SLOTS[idx].min);
+      new Notification(`${stamp.emoji} ${stamp.label} の時間だよ！`, {
+        body: `${timeStr} からはじまるよ 🌟`,
+        icon: "/icons/icon-192.png",
+      });
+    };
+    check();
+    const id = setInterval(check, 60_000);
+    return () => clearInterval(id);
+  }, [schedules, mealOverrides, defaultMeals]);
+}
+
 // ── Tabs ───────────────────────────────────────────────────────────────────
 const TABS = [
-  { id:"schedule", label:"予定",   emoji:"📅" },
-  { id:"check",    label:"チェック",emoji:"✅" },
-  { id:"memo",     label:"メモ",   emoji:"📝" },
+  { id:"schedule", label:"予定",     emoji:"📅" },
+  { id:"timer",    label:"タイマー", emoji:"⏱" },
+  { id:"check",    label:"チェック", emoji:"✅" },
+  { id:"memo",     label:"メモ",     emoji:"📝" },
 ];
+
+// ── Timer presets ───────────────────────────────────────────────────────────
+const TIMER_PRESETS = [
+  { label:"10分", mins:10, emoji:"⚡" },
+  { label:"15分", mins:15, emoji:"📖" },
+  { label:"25分", mins:25, emoji:"🍅" },
+  { label:"30分", mins:30, emoji:"📚" },
+  { label:"45分", mins:45, emoji:"💪" },
+  { label:"60分", mins:60, emoji:"🏆" },
+];
+
+// ── Circular progress component ─────────────────────────────────────────────
+function CircleProgress({ progress, size=140, stroke=10, color="#7c5cfc", bgColor="#e8e0ff", children }) {
+  const r = (size - stroke) / 2;
+  const circ = 2 * Math.PI * r;
+  const offset = circ * (1 - Math.max(0, Math.min(1, progress)));
+  return (
+    <div style={{ position:"relative", width:size, height:size }}>
+      <svg width={size} height={size} style={{ transform:"rotate(-90deg)" }}>
+        <circle cx={size/2} cy={size/2} r={r} fill="none" stroke={bgColor} strokeWidth={stroke}/>
+        <circle cx={size/2} cy={size/2} r={r} fill="none" stroke={color} strokeWidth={stroke}
+          strokeDasharray={circ} strokeDashoffset={offset} strokeLinecap="round"
+          style={{ transition:"stroke-dashoffset 0.5s ease" }}/>
+      </svg>
+      <div style={{ position:"absolute", inset:0, display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center" }}>
+        {children}
+      </div>
+    </div>
+  );
+}
+
+// ── Get current/next block from schedule ─────────────────────────────────────
+function getCurrentBlock(schedule, mealSlots) {
+  const now = new Date();
+  const h = now.getHours(), m = Math.floor(now.getMinutes() / 10) * 10;
+  const idx = SLOTS.findIndex(s => s.hour === h && s.min === m);
+  if (idx < 0) return { current: null, next: null, currentIdx: -1 };
+
+  const isMeal = mealSlots.has(idx);
+  const stampId = isMeal ? "meal" : schedule[idx];
+  const stamp = stampId ? getS(stampId) : null;
+
+  // Find block boundaries
+  let current = null;
+  if (stamp) {
+    const inBlock = (i) => isMeal ? mealSlots.has(i) : (!mealSlots.has(i) && schedule[i] === stampId);
+    let start = idx, end = idx;
+    while (start > 0 && inBlock(start - 1)) start--;
+    while (end < SLOTS.length - 1 && inBlock(end + 1)) end++;
+    const startSlot = SLOTS[start], endNext = SLOTS[end + 1];
+    const startMin = startSlot.hour * 60 + startSlot.min;
+    const endMin = endNext ? endNext.hour * 60 + endNext.min : 24 * 60;
+    const nowMin = now.getHours() * 60 + now.getMinutes();
+    current = { stamp, startMin, endMin, remainSec: Math.max(0, (endMin - nowMin) * 60 - now.getSeconds()), totalSec: (endMin - startMin) * 60 };
+  }
+
+  // Find next block
+  let next = null;
+  for (let i = idx + 1; i < SLOTS.length; i++) {
+    const nextIsMeal = mealSlots.has(i);
+    const nextId = nextIsMeal ? "meal" : schedule[i];
+    if (!nextId) continue;
+    // Skip if same block
+    if (current && nextId === (isMeal ? "meal" : stampId)) {
+      const inSame = (j) => isMeal ? mealSlots.has(j) : (!mealSlots.has(j) && schedule[j] === stampId);
+      if (inSame(i)) continue;
+    }
+    const nextStamp = getS(nextId);
+    if (nextStamp) {
+      next = { stamp: nextStamp, time: fmt(SLOTS[i].hour, SLOTS[i].min) };
+      break;
+    }
+  }
+
+  return { current, next, currentIdx: idx };
+}
 
 // ─────────────────────────────────────────────────────────────────────────
 export default function App() {
   const [mode,         setMode]         = useState("child"); // child | parent
-  const [pin,          setPin]          = useState(DEFAULT_PIN);
+  const [pin,          setPin]          = usePersist("pin", DEFAULT_PIN);
   const [showPin,      setShowPin]      = useState(false);
   const [pinInput,     setPinInput]     = useState("");
   const [pinError,     setPinError]     = useState(false);
@@ -92,14 +288,45 @@ export default function App() {
   const [newPin,       setNewPin]       = useState("");
   const [tab,          setTab]          = useState("schedule");
 
-  // Per-day data
-  const [schedules,     setSchedules]     = useState({});
-  const [mealOverrides, setMealOverrides] = useState({});
-  const [defaultMeals,  setDefaultMeals]  = useState(DEFAULT_MEALS);
-  const [dayData,       setDayData]       = useState({});
-  // Memos: global list [{id, text, done, addedToSchedule}]
-  const [memos,         setMemos]         = useState([]);
+  // Per-day data (persisted)
+  const [schedules,     setSchedules]     = usePersist("schedules", {});
+  const [mealOverrides, setMealOverrides] = usePersist("mealOverrides", {});
+  const [defaultMeals,  setDefaultMeals]  = usePersist("defaultMeals", DEFAULT_MEALS);
+  const [dayData,       setDayData]       = usePersist("dayData", {});
+  const [memos,         setMemos]         = usePersist("memos", []);
   const [memoInput,     setMemoInput]     = useState("");
+
+  // ── Family code & Firestore sync ─────────────────────────────────────────
+  const [familyCode, setFamilyCode] = useState(() => getFamilyCode());
+  const [showFamilyCode, setShowFamilyCode] = useState(false);
+  const [joinCodeInput, setJoinCodeInput] = useState("");
+
+  useFirestoreSync(familyCode, {
+    schedules:     [schedules,     setSchedules],
+    mealOverrides: [mealOverrides, setMealOverrides],
+    defaultMeals:  [defaultMeals,  setDefaultMeals],
+    dayData:       [dayData,       setDayData],
+    memos:         [memos,         setMemos],
+    pin:           [pin,           setPin],
+  });
+
+  const handleJoinFamily = () => {
+    const code = joinCodeInput.trim().toUpperCase();
+    if (code.length >= 4) {
+      localStorage.setItem(STORAGE_PREFIX + "familyCode", code);
+      setFamilyCode(code);
+      setJoinCodeInput("");
+      setShowFamilyCode(false);
+      showToast("ファミリーに参加しました");
+    }
+  };
+
+  const handleNewFamily = () => {
+    const code = Math.random().toString(36).substring(2, 8).toUpperCase();
+    localStorage.setItem(STORAGE_PREFIX + "familyCode", code);
+    setFamilyCode(code);
+    showToast("新しいファミリーを作成しました");
+  };
 
   const [selectedKey,  setSelectedKey]  = useState(todayKey);
   const [showCalendar, setShowCalendar] = useState(false);
@@ -110,6 +337,60 @@ export default function App() {
   // For memo→schedule
   const [addingMemo,   setAddingMemo]   = useState(null); // memo id being scheduled
   const [memoStamp,    setMemoStamp]    = useState("study");
+
+  useNotifications(schedules, mealOverrides, defaultMeals);
+
+  // ── Timer state ───────────────────────────────────────────────────────────
+  const [tick, setTick] = useState(0); // forces re-render every second
+  const [customTimer, setCustomTimer] = useState(null); // { totalSec, remainSec, stampId, running }
+  const customTimerRef = useRef(null);
+
+  // Tick every second for timer tab
+  useEffect(() => {
+    if (tab !== "timer") return;
+    const id = setInterval(() => setTick(t => t + 1), 1000);
+    return () => clearInterval(id);
+  }, [tab]);
+
+  // Custom timer countdown
+  useEffect(() => {
+    if (!customTimer?.running) return;
+    const id = setInterval(() => {
+      setCustomTimer(prev => {
+        if (!prev || !prev.running) return prev;
+        const next = prev.remainSec - 1;
+        if (next <= 0) {
+          // Timer done — notify
+          if (typeof Notification !== "undefined" && Notification.permission === "granted") {
+            new Notification("⏱ タイマー終了！", { body: "おつかれさま！", icon: "/icons/icon-192.png" });
+          }
+          showToast("⏱ タイマーが終わったよ！");
+          return { ...prev, remainSec: 0, running: false };
+        }
+        return { ...prev, remainSec: next };
+      });
+    }, 1000);
+    return () => clearInterval(id);
+  }, [customTimer?.running]);
+
+  const todaySchedule = schedules[todayKey] || {};
+  const todayMeals = mealOverrides[todayKey] || defaultMeals;
+  const todayMealSlots = buildMealSlots(todayMeals);
+  const nowBlock = getCurrentBlock(todaySchedule, todayMealSlots);
+
+  const startCustomTimer = (mins, stampId) => {
+    setCustomTimer({ totalSec: mins * 60, remainSec: mins * 60, stampId, running: true });
+  };
+  const toggleCustomTimer = () => {
+    setCustomTimer(prev => prev ? { ...prev, running: !prev.running } : null);
+  };
+  const resetCustomTimer = () => setCustomTimer(null);
+
+  const fmtSec = (sec) => {
+    const m = Math.floor(sec / 60);
+    const s = sec % 60;
+    return `${m}:${String(s).padStart(2, "0")}`;
+  };
 
   const isDrag  = useRef(false);
   const lastIdx = useRef(null);
@@ -290,7 +571,23 @@ export default function App() {
               <div style={{ display:"flex", gap:8, marginTop:10, flexWrap:"wrap" }}>
                 <button onClick={()=>{const cur=mealOverrides[selectedKey]||defaultMeals;setDefaultMeals(cur);showToast("✅ デフォルト更新");}} style={{ background:"#fff3cc", border:"2px solid #c9a800", borderRadius:8, padding:"5px 12px", fontSize:11, fontWeight:700, color:"#c9a800", cursor:"pointer" }}>デフォルトに設定</button>
                 <button onClick={()=>setShowPinChange(v=>!v)} style={{ background:"#f0eeff", border:"2px solid #a88ff0", borderRadius:8, padding:"5px 12px", fontSize:11, fontWeight:700, color:"#7c5cfc", cursor:"pointer" }}>🔑 PIN変更</button>
+                <button onClick={()=>{if(typeof Notification!=="undefined"){Notification.requestPermission().then(p=>{showToast(p==="granted"?"🔔 通知オン！":"🔕 通知が許可されませんでした");});}else{showToast("このブラウザは通知に対応していません");}}} style={{ background:"#fff0f5", border:"2px solid #ffb3c8", borderRadius:8, padding:"5px 12px", fontSize:11, fontWeight:700, color:"#d44", cursor:"pointer" }}>🔔 通知を設定</button>
+                <button onClick={()=>setShowFamilyCode(v=>!v)} style={{ background:"#e8f5e9", border:"2px solid #4caf50", borderRadius:8, padding:"5px 12px", fontSize:11, fontWeight:700, color:"#2e7d32", cursor:"pointer" }}>👨‍👩‍👧 ファミリー設定</button>
               </div>
+              {showFamilyCode && (
+                <div style={{ marginTop:10, background:"#f0faf0", border:"2px solid #a5d6a7", borderRadius:10, padding:12 }}>
+                  <div style={{ fontSize:12, fontWeight:700, color:"#2e7d32", marginBottom:6 }}>ファミリーコード（他の端末で共有）</div>
+                  <div style={{ fontSize:20, fontWeight:900, letterSpacing:4, color:"#1b5e20", textAlign:"center", padding:"6px 0", background:"#fff", borderRadius:8, border:"1px solid #c8e6c9", userSelect:"all" }}>{familyCode}</div>
+                  <div style={{ fontSize:10, color:"#666", marginTop:4, textAlign:"center" }}>このコードを他の端末で入力するとデータを共有できます</div>
+                  <div style={{ marginTop:10, fontSize:12, fontWeight:700, color:"#2e7d32" }}>別のファミリーに参加</div>
+                  <div style={{ display:"flex", gap:8, marginTop:4, alignItems:"center" }}>
+                    <input type="text" placeholder="コードを入力" value={joinCodeInput} onChange={e=>setJoinCodeInput(e.target.value.toUpperCase())}
+                      style={{ border:"2px solid #a5d6a7", borderRadius:8, padding:"5px 10px", fontSize:13, fontFamily:"inherit", width:120, textTransform:"uppercase" }}/>
+                    <button onClick={handleJoinFamily} style={{ background:"#4caf50", border:"none", borderRadius:8, padding:"6px 12px", fontSize:12, fontWeight:800, color:"white", cursor:"pointer" }}>参加</button>
+                    <button onClick={handleNewFamily} style={{ background:"#fff", border:"2px solid #4caf50", borderRadius:8, padding:"5px 12px", fontSize:11, fontWeight:700, color:"#2e7d32", cursor:"pointer" }}>新規作成</button>
+                  </div>
+                </div>
+              )}
               {showPinChange && (
                 <div style={{ marginTop:10, display:"flex", gap:8, alignItems:"center" }}>
                   <input type="password" maxLength={4} placeholder="新しいPIN(4桁)" value={newPin} onChange={e=>setNewPin(e.target.value.slice(0,4))}
@@ -379,6 +676,118 @@ export default function App() {
               </div>
             )}
             {canEdit&&<div style={{ textAlign:"center", fontSize:11, color:"#ccc", marginTop:12 }}>ドラッグで一気に塗れるよ 🎨</div>}
+          </>
+        )}
+
+        {/* ── TAB: TIMER ── */}
+        {tab==="timer" && (
+          <>
+            {/* Current activity */}
+            <div style={{ background:"white", borderRadius:18, padding:"20px 16px", border:"2px solid #E0D8FF", boxShadow:"0 4px 20px rgba(100,80,200,.07)", marginBottom:12, textAlign:"center" }}>
+              <div style={{ fontWeight:800, color:"#5b3fc4", fontSize:14, marginBottom:16 }}>いまの予定</div>
+              {nowBlock.current ? (
+                <>
+                  <div style={{ display:"flex", justifyContent:"center", marginBottom:12 }}>
+                    <CircleProgress
+                      progress={nowBlock.current.remainSec / nowBlock.current.totalSec}
+                      color={nowBlock.current.stamp.border}
+                      bgColor={nowBlock.current.stamp.color}
+                    >
+                      <span style={{ fontSize:32 }}>{nowBlock.current.stamp.emoji}</span>
+                      <span style={{ fontSize:20, fontWeight:900, color:nowBlock.current.stamp.border, fontVariantNumeric:"tabular-nums" }}>
+                        {fmtSec(nowBlock.current.remainSec)}
+                      </span>
+                    </CircleProgress>
+                  </div>
+                  <div style={{ fontSize:16, fontWeight:800, color:nowBlock.current.stamp.border }}>
+                    {nowBlock.current.stamp.label}
+                  </div>
+                  <div style={{ fontSize:12, color:"#aaa", marginTop:4 }}>
+                    のこり {nowBlock.current.remainSec >= 60
+                      ? `${Math.floor(nowBlock.current.remainSec / 60)}分${nowBlock.current.remainSec % 60 > 0 ? `${nowBlock.current.remainSec % 60}秒` : ""}`
+                      : `${nowBlock.current.remainSec}秒`}
+                  </div>
+                </>
+              ) : (
+                <div style={{ padding:"20px 0" }}>
+                  <div style={{ fontSize:40, marginBottom:8 }}>😴</div>
+                  <div style={{ fontSize:14, color:"#aaa", fontWeight:600 }}>いま予定はないよ</div>
+                  <div style={{ fontSize:11, color:"#ccc", marginTop:4 }}>予定タブでスケジュールを作ってね</div>
+                </div>
+              )}
+              {/* Next up */}
+              {nowBlock.next && (
+                <div style={{ marginTop:14, padding:"10px 14px", background:"#faf8ff", borderRadius:12, border:"2px solid #e8e0ff", display:"inline-flex", alignItems:"center", gap:8 }}>
+                  <span style={{ fontSize:11, color:"#aaa", fontWeight:700 }}>つぎ</span>
+                  <span style={{ fontSize:16 }}>{nowBlock.next.stamp.emoji}</span>
+                  <span style={{ fontSize:13, fontWeight:800, color:nowBlock.next.stamp.border }}>{nowBlock.next.stamp.label}</span>
+                  <span style={{ fontSize:11, color:"#aaa" }}>{nowBlock.next.time}〜</span>
+                </div>
+              )}
+            </div>
+
+            {/* Custom timer */}
+            <div style={{ background:"white", borderRadius:18, padding:"20px 16px", border:"2px solid #E0D8FF", boxShadow:"0 4px 20px rgba(100,80,200,.07)", textAlign:"center" }}>
+              <div style={{ fontWeight:800, color:"#5b3fc4", fontSize:14, marginBottom:14 }}>カスタムタイマー</div>
+              {customTimer ? (
+                <>
+                  <div style={{ display:"flex", justifyContent:"center", marginBottom:12 }}>
+                    <CircleProgress
+                      progress={customTimer.remainSec / customTimer.totalSec}
+                      size={160}
+                      stroke={12}
+                      color={customTimer.remainSec === 0 ? "#4caf82" : "#7c5cfc"}
+                      bgColor={customTimer.remainSec === 0 ? "#C8F5E0" : "#e8e0ff"}
+                    >
+                      {customTimer.stampId && getS(customTimer.stampId) && (
+                        <span style={{ fontSize:24 }}>{getS(customTimer.stampId).emoji}</span>
+                      )}
+                      <span style={{ fontSize:28, fontWeight:900, color:customTimer.remainSec === 0 ? "#4caf82" : "#5b3fc4", fontVariantNumeric:"tabular-nums" }}>
+                        {fmtSec(customTimer.remainSec)}
+                      </span>
+                      {customTimer.remainSec === 0 && (
+                        <span style={{ fontSize:12, fontWeight:800, color:"#4caf82" }}>おわり！</span>
+                      )}
+                    </CircleProgress>
+                  </div>
+                  <div style={{ display:"flex", gap:10, justifyContent:"center" }}>
+                    {customTimer.remainSec > 0 && (
+                      <button onClick={toggleCustomTimer}
+                        style={{ background:customTimer.running?"#fff0f5":"#e8f5e9", border:`2px solid ${customTimer.running?"#ffb3c8":"#4caf82"}`, borderRadius:12, padding:"10px 24px", fontSize:14, fontWeight:800, color:customTimer.running?"#d44":"#2a7a52", cursor:"pointer" }}>
+                        {customTimer.running ? "⏸ ストップ" : "▶ スタート"}
+                      </button>
+                    )}
+                    <button onClick={resetCustomTimer}
+                      style={{ background:"#f4f2ff", border:"2px solid #e0d8ff", borderRadius:12, padding:"10px 24px", fontSize:14, fontWeight:800, color:"#7c5cfc", cursor:"pointer" }}>
+                      ↩ リセット
+                    </button>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <div style={{ fontSize:12, color:"#aaa", marginBottom:14 }}>勉強やゲームの時間を決めてタイマーをかけよう</div>
+                  <div style={{ display:"grid", gridTemplateColumns:"repeat(3,1fr)", gap:8, marginBottom:14 }}>
+                    {TIMER_PRESETS.map(p => (
+                      <button key={p.mins} onClick={() => startCustomTimer(p.mins, null)}
+                        style={{ background:"#f4f2ff", border:"2px solid #e0d8ff", borderRadius:12, padding:"12px 8px", cursor:"pointer", display:"flex", flexDirection:"column", alignItems:"center", gap:4 }}>
+                        <span style={{ fontSize:20 }}>{p.emoji}</span>
+                        <span style={{ fontSize:13, fontWeight:800, color:"#5b3fc4" }}>{p.label}</span>
+                      </button>
+                    ))}
+                  </div>
+                  <div style={{ fontSize:11, color:"#bbb", marginBottom:10 }}>スタンプ付きタイマー</div>
+                  <div style={{ display:"flex", gap:6, overflowX:"auto", justifyContent:"center", flexWrap:"wrap" }}>
+                    {STAMPS.filter(s => s.id !== "sleep").map(s => (
+                      <button key={s.id} onClick={() => startCustomTimer(25, s.id)}
+                        style={{ background:s.color, border:`2px solid ${s.border}44`, borderRadius:10, padding:"8px 12px", cursor:"pointer", display:"flex", alignItems:"center", gap:4, fontSize:12, fontWeight:700, color:s.border }}>
+                        <span style={{ fontSize:16 }}>{s.emoji}</span>
+                        {s.label}
+                      </button>
+                    ))}
+                  </div>
+                </>
+              )}
+            </div>
           </>
         )}
 
