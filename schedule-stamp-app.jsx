@@ -29,45 +29,71 @@ function getFamilyCode() {
   return code;
 }
 
-function useFirestoreSync(familyCode, dataMap) {
-  // dataMap: { key: [value, setter] }
-  const skipNextRemote = useRef({});
+// Tracks whether we're currently applying remote data (prevents write-back loops)
+let _applyingRemote = false;
+// Tracks whether this is the first snapshot after joining a family (remote wins)
+let _firstSnapshot = true;
 
-  // Upload to Firestore when local data changes
+function useFirestoreSync(familyCode, dataMap) {
+  const dataRef = useRef(dataMap);
+  dataRef.current = dataMap;
+  const debounceTimer = useRef(null);
+  const lastWrittenJson = useRef("");
+
+  // Upload to Firestore with debounce (waits 800ms after last change)
   useEffect(() => {
-    if (!familyCode) return;
-    const payload = {};
-    for (const [key, [value]] of Object.entries(dataMap)) {
-      payload[key] = JSON.parse(JSON.stringify(value));
-    }
-    const ref = doc(db, "families", familyCode);
-    setDoc(ref, payload, { merge: true }).catch(() => {});
-    // Mark that we just wrote, so we skip the next snapshot for these keys
-    for (const key of Object.keys(dataMap)) {
-      skipNextRemote.current[key] = true;
-    }
+    if (!familyCode || _applyingRemote) return;
+    clearTimeout(debounceTimer.current);
+    debounceTimer.current = setTimeout(() => {
+      const payload = {};
+      for (const [key, [value]] of Object.entries(dataRef.current)) {
+        payload[key] = JSON.parse(JSON.stringify(value));
+      }
+      const json = JSON.stringify(payload);
+      // Don't write if nothing changed since last write
+      if (json === lastWrittenJson.current) return;
+      lastWrittenJson.current = json;
+      const ref = doc(db, "families", familyCode);
+      setDoc(ref, payload, { merge: true }).catch(() => {});
+    }, 800);
+    return () => clearTimeout(debounceTimer.current);
   }, [...Object.entries(dataMap).map(([, [v]]) => v), familyCode]);
 
   // Listen for remote changes
   useEffect(() => {
     if (!familyCode) return;
+    _firstSnapshot = true;
     const ref = doc(db, "families", familyCode);
     const unsub = onSnapshot(ref, (snap) => {
-      if (!snap.exists()) return;
+      if (!snap.exists()) {
+        _firstSnapshot = false;
+        return;
+      }
       const remote = snap.data();
-      for (const [key, [, setter]] of Object.entries(dataMap)) {
-        if (skipNextRemote.current[key]) {
-          skipNextRemote.current[key] = false;
-          continue;
-        }
-        if (remote[key] !== undefined) {
-          const remoteStr = JSON.stringify(remote[key]);
-          const localStr = JSON.stringify(loadJSON(key, null));
-          if (remoteStr !== localStr) {
-            setter(remote[key]);
-          }
+      const remoteJson = JSON.stringify(remote);
+      // If this matches what we last wrote, skip (it's our own echo)
+      if (remoteJson === lastWrittenJson.current && !_firstSnapshot) return;
+
+      // On first snapshot (e.g. joining a family), remote always wins
+      const isFirst = _firstSnapshot;
+      _firstSnapshot = false;
+
+      _applyingRemote = true;
+      for (const [key, [, setter]] of Object.entries(dataRef.current)) {
+        if (remote[key] === undefined) continue;
+        const remoteStr = JSON.stringify(remote[key]);
+        const localStr = JSON.stringify(loadJSON(key, null));
+        if (remoteStr !== localStr || isFirst) {
+          setter(remote[key]);
         }
       }
+      // Update lastWrittenJson so we don't write back what we just received
+      const payload = {};
+      for (const [key, [value]] of Object.entries(dataRef.current)) {
+        payload[key] = remote[key] !== undefined ? remote[key] : JSON.parse(JSON.stringify(value));
+      }
+      lastWrittenJson.current = JSON.stringify(payload);
+      _applyingRemote = false;
     });
     return unsub;
   }, [familyCode]);
@@ -313,6 +339,8 @@ export default function App() {
   const handleJoinFamily = () => {
     const code = joinCodeInput.trim().toUpperCase();
     if (code.length >= 4) {
+      // Mark first snapshot so remote data wins over local
+      _firstSnapshot = true;
       localStorage.setItem(STORAGE_PREFIX + "familyCode", code);
       setFamilyCode(code);
       setJoinCodeInput("");
