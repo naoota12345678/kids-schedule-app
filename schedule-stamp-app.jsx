@@ -225,28 +225,22 @@ export default function App() {
               {mode==="parent" && (
                 <>
                   <button onClick={()=>{setShowMealSet(v=>!v);setShowCalendar(false);}} style={{ background:showMealSet?"#FFE5B0":"#fff8ee", border:"2px solid #d4900a", borderRadius:9, padding:"5px 10px", fontSize:11, fontWeight:700, color:"#d4900a", cursor:"pointer" }}>🍱 ごはん</button>
-                  <button onClick={()=>{setShowCalendar(v=>!v);setShowMealSet(false);}} style={{ background:showCalendar?"#d4c8ff":"#f4f2ff", border:"2px solid #7c5cfc", borderRadius:9, padding:"5px 10px", fontSize:11, fontWeight:700, color:"#7c5cfc", cursor:"pointer" }}>📆</button>
                   <button onClick={()=>{setMode("child");showToast("👦 子どもモードに戻りました");}} style={{ background:"#fff0f5", border:"2px solid #ffb3c8", borderRadius:9, padding:"5px 10px", fontSize:11, fontWeight:700, color:"#d44", cursor:"pointer" }}>ログアウト</button>
                 </>
               )}
+              <button onClick={()=>{setShowCalendar(v=>!v);setShowMealSet(false);}} style={{ background:showCalendar?"#d4c8ff":"#f4f2ff", border:"2px solid #7c5cfc", borderRadius:9, padding:"5px 10px", fontSize:11, fontWeight:700, color:"#7c5cfc", cursor:"pointer" }}>📆</button>
               <button onClick={()=>setSchedules(s=>({...s,[selectedKey]:{}}))} style={{ background:"#fff0f5", border:"2px solid #ffb3c8", borderRadius:9, padding:"5px 10px", fontSize:11, fontWeight:700, color:"#d44", cursor:"pointer" }}>🗑</button>
             </div>
           </div>
 
           {/* Date row */}
           <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:8 }}>
-            {mode==="parent" && (
-              <button onClick={()=>setSelectedKey(k=>toKey(addDays(keyToDate(k),-1)))} style={{ background:"#f4f2ff", border:"2px solid #e0d8ff", borderRadius:8, padding:"3px 10px", fontSize:16, cursor:"pointer", color:"#7c5cfc" }}>‹</button>
-            )}
+            <button onClick={()=>setSelectedKey(k=>toKey(addDays(keyToDate(k),-1)))} style={{ background:"#f4f2ff", border:"2px solid #e0d8ff", borderRadius:8, padding:"3px 10px", fontSize:16, cursor:"pointer", color:"#7c5cfc" }}>‹</button>
             <div style={{ flex:1, textAlign:"center", fontSize:14, fontWeight:900, color:isToday?"#5b3fc4":"#888" }}>
               {isToday ? `今日 ${fmtDate(new Date())}` : fmtDate(keyToDate(selectedKey))}
             </div>
-            {mode==="parent" && (
-              <>
-                <button onClick={()=>setSelectedKey(k=>toKey(addDays(keyToDate(k),1)))} style={{ background:"#f4f2ff", border:"2px solid #e0d8ff", borderRadius:8, padding:"3px 10px", fontSize:16, cursor:"pointer", color:"#7c5cfc" }}>›</button>
-                {!isToday && <button onClick={()=>setSelectedKey(todayKey)} style={{ background:"#e8f5e9", border:"2px solid #4caf82", borderRadius:8, padding:"3px 8px", fontSize:10, fontWeight:700, color:"#2a7a52", cursor:"pointer" }}>今日</button>}
-              </>
-            )}
+            <button onClick={()=>setSelectedKey(k=>toKey(addDays(keyToDate(k),1)))} style={{ background:"#f4f2ff", border:"2px solid #e0d8ff", borderRadius:8, padding:"3px 10px", fontSize:16, cursor:"pointer", color:"#7c5cfc" }}>›</button>
+            {!isToday && <button onClick={()=>setSelectedKey(todayKey)} style={{ background:"#e8f5e9", border:"2px solid #4caf82", borderRadius:8, padding:"3px 8px", fontSize:10, fontWeight:700, color:"#2a7a52", cursor:"pointer" }}>今日</button>}
           </div>
 
           {/* Calendar */}
