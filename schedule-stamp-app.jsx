@@ -21,11 +21,11 @@ function usePersist(key, fallback) {
 
 // ── Firestore sync helpers ────────────────────────────────────────────────
 function getFamilyCode() {
-  let code = localStorage.getItem(STORAGE_PREFIX + "familyCode");
-  if (!code) {
-    code = Math.random().toString(36).substring(2, 8).toUpperCase();
-    localStorage.setItem(STORAGE_PREFIX + "familyCode", code);
-  }
+  return localStorage.getItem(STORAGE_PREFIX + "familyCode") || "";
+}
+function createFamilyCode() {
+  const code = Math.random().toString(36).substring(2, 8).toUpperCase();
+  localStorage.setItem(STORAGE_PREFIX + "familyCode", code);
   return code;
 }
 
@@ -326,6 +326,7 @@ export default function App() {
   const [familyCode, setFamilyCode] = useState(() => getFamilyCode());
   const [showFamilyCode, setShowFamilyCode] = useState(false);
   const [joinCodeInput, setJoinCodeInput] = useState("");
+  const [setupJoinInput, setSetupJoinInput] = useState("");
 
   useFirestoreSync(familyCode, {
     schedules:     [schedules,     setSchedules],
@@ -336,25 +337,52 @@ export default function App() {
     pin:           [pin,           setPin],
   });
 
-  const handleJoinFamily = () => {
-    const code = joinCodeInput.trim().toUpperCase();
-    if (code.length >= 4) {
-      // Mark first snapshot so remote data wins over local
+  const handleJoinFamily = (code) => {
+    const c = (code || joinCodeInput).trim().toUpperCase();
+    if (c.length >= 4) {
       _firstSnapshot = true;
-      localStorage.setItem(STORAGE_PREFIX + "familyCode", code);
-      setFamilyCode(code);
+      localStorage.setItem(STORAGE_PREFIX + "familyCode", c);
+      setFamilyCode(c);
       setJoinCodeInput("");
+      setSetupJoinInput("");
       setShowFamilyCode(false);
-      showToast("ファミリーに参加しました");
     }
   };
 
   const handleNewFamily = () => {
-    const code = Math.random().toString(36).substring(2, 8).toUpperCase();
-    localStorage.setItem(STORAGE_PREFIX + "familyCode", code);
+    const code = createFamilyCode();
     setFamilyCode(code);
-    showToast("新しいファミリーを作成しました");
   };
+
+  // ── Setup screen (no family code yet) ────────────────────────────────────
+  if (!familyCode) {
+    return (
+      <div style={{ minHeight:"100vh", background:"#F4F2FF", fontFamily:"'Hiragino Maru Gothic ProN','BIZ UDPGothic',sans-serif", display:"flex", alignItems:"center", justifyContent:"center" }}>
+        <div style={{ background:"white", borderRadius:20, padding:"32px 28px", maxWidth:360, width:"90%", boxShadow:"0 4px 24px rgba(100,70,220,.12)", textAlign:"center" }}>
+          <div style={{ fontSize:36, marginBottom:8 }}>📅</div>
+          <div style={{ fontSize:20, fontWeight:900, color:"#5b3fc4", marginBottom:4 }}>きょうの予定</div>
+          <div style={{ fontSize:12, color:"#888", marginBottom:24 }}>はじめに設定してね</div>
+
+          <button onClick={handleNewFamily}
+            style={{ width:"100%", background:"linear-gradient(135deg,#7c5cfc,#a78bfa)", border:"none", borderRadius:14, padding:"14px", fontSize:15, fontWeight:800, color:"white", cursor:"pointer", marginBottom:16, boxShadow:"0 3px 12px rgba(124,92,252,.3)" }}>
+            🏠 新しいファミリーを作る
+          </button>
+
+          <div style={{ fontSize:12, color:"#aaa", marginBottom:12 }}>または</div>
+
+          <div style={{ fontSize:13, fontWeight:700, color:"#5b3fc4", marginBottom:8, textAlign:"left" }}>ファミリーコードで参加</div>
+          <div style={{ display:"flex", gap:8 }}>
+            <input type="text" placeholder="コードを入力" value={setupJoinInput}
+              onChange={e=>setSetupJoinInput(e.target.value.toUpperCase())}
+              style={{ flex:1, border:"2px solid #e0d8ff", borderRadius:10, padding:"10px 12px", fontSize:15, fontFamily:"inherit", textTransform:"uppercase", letterSpacing:2, textAlign:"center" }}/>
+            <button onClick={()=>handleJoinFamily(setupJoinInput)}
+              style={{ background:"#5b3fc4", border:"none", borderRadius:10, padding:"10px 16px", fontSize:14, fontWeight:800, color:"white", cursor:"pointer" }}>参加</button>
+          </div>
+          <div style={{ fontSize:10, color:"#aaa", marginTop:8 }}>他の端末の「ファミリー設定」にコードがあります</div>
+        </div>
+      </div>
+    );
+  }
 
   const [selectedKey,  setSelectedKey]  = useState(todayKey);
   const [showCalendar, setShowCalendar] = useState(false);
