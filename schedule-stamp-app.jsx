@@ -73,10 +73,14 @@ function useFirestoreSync(familyCode, dataMap) {
   // Listen for remote changes
   useEffect(() => {
     if (!familyCode) return;
+    console.log("[KidsApp] Setting up Firestore listener for family:", familyCode);
+    console.log("[KidsApp] Firebase db object:", db ? "OK" : "MISSING", db);
     _firstSnapshot = true;
     _receivedFirstSnapshot = false;
-    const ref = doc(db, "families", familyCode);
-    const unsub = onSnapshot(ref, (snap) => {
+    try {
+      const ref = doc(db, "families", familyCode);
+      console.log("[KidsApp] Document ref created:", ref.path);
+      const unsub = onSnapshot(ref, (snap) => {
       console.log("[KidsApp] Snapshot received:", { exists: snap.exists(), _firstSnapshot, familyCode });
       if (!snap.exists()) {
         console.log("[KidsApp] Document does not exist for family:", familyCode);
@@ -130,6 +134,10 @@ function useFirestoreSync(familyCode, dataMap) {
       unsub();
       _receivedFirstSnapshot = false;
     };
+    } catch (err) {
+      console.error("[KidsApp] Failed to set up Firestore listener:", err);
+      _receivedFirstSnapshot = true;
+    }
   }, [familyCode]);
 }
 
