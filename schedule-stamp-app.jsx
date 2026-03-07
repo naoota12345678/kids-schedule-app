@@ -728,6 +728,12 @@ export default function App() {
         {/* ── TAB: SCHEDULE ── */}
         {tab==="schedule" && (
           <>
+            <div style={{ background:"#fff3cd", border:"2px solid #ffc107", borderRadius:10, padding:8, marginBottom:8, fontSize:11, wordBreak:"break-all" }}>
+              <b>DEBUG:</b> selectedKey={selectedKey} todayKey={todayKey} familyCode={familyCode}<br/>
+              schedules keys: {JSON.stringify(Object.keys(schedules))}<br/>
+              schedule slots filled: {Object.keys(schedule).length}<br/>
+              schedule data: {JSON.stringify(schedule).substring(0, 200)}
+            </div>
             <div style={{ background:"white", borderRadius:18, overflow:"hidden", border:"2px solid #E0D8FF", boxShadow:"0 4px 20px rgba(100,80,200,.07)", marginBottom:12 }}>
               {SLOTS.map((slot,idx)=>{
                 const isMeal  = mealSlots.has(idx);
