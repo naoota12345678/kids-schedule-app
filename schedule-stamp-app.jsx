@@ -44,6 +44,7 @@ function useFirestoreSync(familyCode, dataMap) {
 
   // Upload to Firestore with debounce (waits 800ms after last change)
   useEffect(() => {
+    console.log("[KidsApp] Upload effect:", { familyCode, _applyingRemote, _receivedFirstSnapshot });
     if (!familyCode || _applyingRemote || !_receivedFirstSnapshot) return;
     clearTimeout(debounceTimer.current);
     debounceTimer.current = setTimeout(() => {
@@ -53,10 +54,16 @@ function useFirestoreSync(familyCode, dataMap) {
       }
       const json = JSON.stringify(payload);
       // Don't write if nothing changed since last write
-      if (json === lastWrittenJson.current) return;
+      if (json === lastWrittenJson.current) {
+        console.log("[KidsApp] Upload skipped (no changes)");
+        return;
+      }
+      console.log("[KidsApp] Uploading to Firestore, family:", familyCode);
       lastWrittenJson.current = json;
       const ref = doc(db, "families", familyCode);
-      setDoc(ref, payload, { merge: true }).catch((err) => {
+      setDoc(ref, payload, { merge: true }).then(() => {
+        console.log("[KidsApp] Upload success");
+      }).catch((err) => {
         console.error("[KidsApp] Firestore write failed:", err);
       });
     }, 800);
@@ -70,15 +77,20 @@ function useFirestoreSync(familyCode, dataMap) {
     _receivedFirstSnapshot = false;
     const ref = doc(db, "families", familyCode);
     const unsub = onSnapshot(ref, (snap) => {
+      console.log("[KidsApp] Snapshot received:", { exists: snap.exists(), _firstSnapshot, familyCode });
       if (!snap.exists()) {
+        console.log("[KidsApp] Document does not exist for family:", familyCode);
         _firstSnapshot = false;
         _receivedFirstSnapshot = true;
         return;
       }
       const remote = snap.data();
+      console.log("[KidsApp] Remote data keys:", Object.keys(remote));
+      console.log("[KidsApp] Remote schedules keys:", remote.schedules ? Object.keys(remote.schedules) : "none");
       const remoteJson = JSON.stringify(remote);
       // If this matches what we last wrote, skip (it's our own echo)
       if (remoteJson === lastWrittenJson.current && !_firstSnapshot) {
+        console.log("[KidsApp] Skipping snapshot (echo of own write)");
         _receivedFirstSnapshot = true;
         return;
       }
@@ -87,13 +99,16 @@ function useFirestoreSync(familyCode, dataMap) {
       const isFirst = _firstSnapshot;
       _firstSnapshot = false;
 
+      console.log("[KidsApp] Applying remote data, isFirst:", isFirst);
       _applyingRemote = true;
       try {
         for (const [key, [, setter]] of Object.entries(dataRef.current)) {
           if (remote[key] === undefined) continue;
           const remoteStr = JSON.stringify(remote[key]);
           const localStr = JSON.stringify(loadJSON(key, null));
-          if (remoteStr !== localStr || isFirst) {
+          const willUpdate = remoteStr !== localStr || isFirst;
+          console.log("[KidsApp] Field:", key, "willUpdate:", willUpdate, "isFirst:", isFirst, "differs:", remoteStr !== localStr);
+          if (willUpdate) {
             setter(remote[key]);
           }
         }
