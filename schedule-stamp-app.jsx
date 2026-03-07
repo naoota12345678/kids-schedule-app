@@ -681,7 +681,7 @@ export default function App() {
                   <div style={{ display:"flex", gap:8, marginTop:4, alignItems:"center" }}>
                     <input type="text" placeholder="コードを入力" value={joinCodeInput} onChange={e=>setJoinCodeInput(e.target.value.toUpperCase())}
                       style={{ border:"2px solid #a5d6a7", borderRadius:8, padding:"5px 10px", fontSize:13, fontFamily:"inherit", width:120, textTransform:"uppercase" }}/>
-                    <button onClick={handleJoinFamily} style={{ background:"#4caf50", border:"none", borderRadius:8, padding:"6px 12px", fontSize:12, fontWeight:800, color:"white", cursor:"pointer" }}>参加</button>
+                    <button onClick={()=>handleJoinFamily(joinCodeInput)} style={{ background:"#4caf50", border:"none", borderRadius:8, padding:"6px 12px", fontSize:12, fontWeight:800, color:"white", cursor:"pointer" }}>参加</button>
                     <button onClick={handleNewFamily} style={{ background:"#fff", border:"2px solid #4caf50", borderRadius:8, padding:"5px 12px", fontSize:11, fontWeight:700, color:"#2e7d32", cursor:"pointer" }}>新規作成</button>
                   </div>
                 </div>
