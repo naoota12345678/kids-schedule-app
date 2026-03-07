@@ -33,6 +33,8 @@ function createFamilyCode() {
 let _applyingRemote = false;
 // Tracks whether this is the first snapshot after joining a family (remote wins)
 let _firstSnapshot = true;
+// Blocks uploads until we've received the first snapshot (prevents overwriting remote data)
+let _receivedFirstSnapshot = false;
 
 function useFirestoreSync(familyCode, dataMap) {
   const dataRef = useRef(dataMap);
@@ -42,7 +44,7 @@ function useFirestoreSync(familyCode, dataMap) {
 
   // Upload to Firestore with debounce (waits 800ms after last change)
   useEffect(() => {
-    if (!familyCode || _applyingRemote) return;
+    if (!familyCode || _applyingRemote || !_receivedFirstSnapshot) return;
     clearTimeout(debounceTimer.current);
     debounceTimer.current = setTimeout(() => {
       const payload = {};
@@ -54,7 +56,9 @@ function useFirestoreSync(familyCode, dataMap) {
       if (json === lastWrittenJson.current) return;
       lastWrittenJson.current = json;
       const ref = doc(db, "families", familyCode);
-      setDoc(ref, payload, { merge: true }).catch(() => {});
+      setDoc(ref, payload, { merge: true }).catch((err) => {
+        console.error("[KidsApp] Firestore write failed:", err);
+      });
     }, 800);
     return () => clearTimeout(debounceTimer.current);
   }, [...Object.entries(dataMap).map(([, [v]]) => v), familyCode]);
@@ -63,39 +67,54 @@ function useFirestoreSync(familyCode, dataMap) {
   useEffect(() => {
     if (!familyCode) return;
     _firstSnapshot = true;
+    _receivedFirstSnapshot = false;
     const ref = doc(db, "families", familyCode);
     const unsub = onSnapshot(ref, (snap) => {
       if (!snap.exists()) {
         _firstSnapshot = false;
+        _receivedFirstSnapshot = true;
         return;
       }
       const remote = snap.data();
       const remoteJson = JSON.stringify(remote);
       // If this matches what we last wrote, skip (it's our own echo)
-      if (remoteJson === lastWrittenJson.current && !_firstSnapshot) return;
+      if (remoteJson === lastWrittenJson.current && !_firstSnapshot) {
+        _receivedFirstSnapshot = true;
+        return;
+      }
 
       // On first snapshot (e.g. joining a family), remote always wins
       const isFirst = _firstSnapshot;
       _firstSnapshot = false;
 
       _applyingRemote = true;
-      for (const [key, [, setter]] of Object.entries(dataRef.current)) {
-        if (remote[key] === undefined) continue;
-        const remoteStr = JSON.stringify(remote[key]);
-        const localStr = JSON.stringify(loadJSON(key, null));
-        if (remoteStr !== localStr || isFirst) {
-          setter(remote[key]);
+      try {
+        for (const [key, [, setter]] of Object.entries(dataRef.current)) {
+          if (remote[key] === undefined) continue;
+          const remoteStr = JSON.stringify(remote[key]);
+          const localStr = JSON.stringify(loadJSON(key, null));
+          if (remoteStr !== localStr || isFirst) {
+            setter(remote[key]);
+          }
         }
+        // Update lastWrittenJson so we don't write back what we just received
+        const payload = {};
+        for (const [key] of Object.entries(dataRef.current)) {
+          payload[key] = remote[key] !== undefined ? remote[key] : JSON.parse(JSON.stringify(dataRef.current[key][0]));
+        }
+        lastWrittenJson.current = JSON.stringify(payload);
+      } finally {
+        _applyingRemote = false;
+        _receivedFirstSnapshot = true;
       }
-      // Update lastWrittenJson so we don't write back what we just received
-      const payload = {};
-      for (const [key, [value]] of Object.entries(dataRef.current)) {
-        payload[key] = remote[key] !== undefined ? remote[key] : JSON.parse(JSON.stringify(value));
-      }
-      lastWrittenJson.current = JSON.stringify(payload);
-      _applyingRemote = false;
+    }, (err) => {
+      console.error("[KidsApp] Firestore listen failed:", err);
+      _receivedFirstSnapshot = true;
     });
-    return unsub;
+    return () => {
+      unsub();
+      _receivedFirstSnapshot = false;
+    };
   }, [familyCode]);
 }
 
