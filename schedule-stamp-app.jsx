@@ -44,7 +44,6 @@ function useFirestoreSync(familyCode, dataMap) {
 
   // Upload to Firestore with debounce (waits 800ms after last change)
   useEffect(() => {
-    console.log("[KidsApp] Upload effect:", { familyCode, _applyingRemote, _receivedFirstSnapshot });
     if (!familyCode || _applyingRemote || !_receivedFirstSnapshot) return;
     clearTimeout(debounceTimer.current);
     debounceTimer.current = setTimeout(() => {
@@ -54,16 +53,10 @@ function useFirestoreSync(familyCode, dataMap) {
       }
       const json = JSON.stringify(payload);
       // Don't write if nothing changed since last write
-      if (json === lastWrittenJson.current) {
-        console.log("[KidsApp] Upload skipped (no changes)");
-        return;
-      }
-      console.log("[KidsApp] Uploading to Firestore, family:", familyCode);
+      if (json === lastWrittenJson.current) return;
       lastWrittenJson.current = json;
       const ref = doc(db, "families", familyCode);
-      setDoc(ref, payload, { merge: true }).then(() => {
-        console.log("[KidsApp] Upload success");
-      }).catch((err) => {
+      setDoc(ref, payload, { merge: true }).catch((err) => {
         console.error("[KidsApp] Firestore write failed:", err);
       });
     }, 800);
@@ -73,28 +66,20 @@ function useFirestoreSync(familyCode, dataMap) {
   // Listen for remote changes
   useEffect(() => {
     if (!familyCode) return;
-    console.log("[KidsApp] Setting up Firestore listener for family:", familyCode);
-    console.log("[KidsApp] Firebase db object:", db ? "OK" : "MISSING", db);
     _firstSnapshot = true;
     _receivedFirstSnapshot = false;
     try {
       const ref = doc(db, "families", familyCode);
-      console.log("[KidsApp] Document ref created:", ref.path);
       const unsub = onSnapshot(ref, (snap) => {
-      console.log("[KidsApp] Snapshot received:", { exists: snap.exists(), _firstSnapshot, familyCode });
       if (!snap.exists()) {
-        console.log("[KidsApp] Document does not exist for family:", familyCode);
         _firstSnapshot = false;
         _receivedFirstSnapshot = true;
         return;
       }
       const remote = snap.data();
-      console.log("[KidsApp] Remote data keys:", Object.keys(remote));
-      console.log("[KidsApp] Remote schedules keys:", remote.schedules ? Object.keys(remote.schedules) : "none");
       const remoteJson = JSON.stringify(remote);
       // If this matches what we last wrote, skip (it's our own echo)
       if (remoteJson === lastWrittenJson.current && !_firstSnapshot) {
-        console.log("[KidsApp] Skipping snapshot (echo of own write)");
         _receivedFirstSnapshot = true;
         return;
       }
@@ -103,16 +88,13 @@ function useFirestoreSync(familyCode, dataMap) {
       const isFirst = _firstSnapshot;
       _firstSnapshot = false;
 
-      console.log("[KidsApp] Applying remote data, isFirst:", isFirst);
       _applyingRemote = true;
       try {
         for (const [key, [, setter]] of Object.entries(dataRef.current)) {
           if (remote[key] === undefined) continue;
           const remoteStr = JSON.stringify(remote[key]);
           const localStr = JSON.stringify(loadJSON(key, null));
-          const willUpdate = remoteStr !== localStr || isFirst;
-          console.log("[KidsApp] Field:", key, "willUpdate:", willUpdate, "isFirst:", isFirst, "differs:", remoteStr !== localStr);
-          if (willUpdate) {
+          if (remoteStr !== localStr || isFirst) {
             setter(remote[key]);
           }
         }
@@ -383,6 +365,7 @@ export default function App() {
     const c = (code || joinCodeInput).trim().toUpperCase();
     if (c.length >= 4) {
       _firstSnapshot = true;
+      _receivedFirstSnapshot = false;
       localStorage.setItem(STORAGE_PREFIX + "familyCode", c);
       setFamilyCode(c);
       setJoinCodeInput("");
@@ -392,6 +375,8 @@ export default function App() {
   };
 
   const handleNewFamily = () => {
+    _firstSnapshot = true;
+    _receivedFirstSnapshot = false;
     const code = createFamilyCode();
     setFamilyCode(code);
   };
@@ -728,13 +713,7 @@ export default function App() {
         {/* ── TAB: SCHEDULE ── */}
         {tab==="schedule" && (
           <>
-            <div style={{ background:"#fff3cd", border:"2px solid #ffc107", borderRadius:10, padding:8, marginBottom:8, fontSize:11, wordBreak:"break-all" }}>
-              <b>DEBUG:</b> selectedKey={selectedKey} todayKey={todayKey} familyCode={familyCode}<br/>
-              schedules keys: {JSON.stringify(Object.keys(schedules))}<br/>
-              schedule slots filled: {Object.keys(schedule).length}<br/>
-              schedule data: {JSON.stringify(schedule).substring(0, 200)}
-            </div>
-            <div style={{ background:"white", borderRadius:18, overflow:"hidden", border:"2px solid #E0D8FF", boxShadow:"0 4px 20px rgba(100,80,200,.07)", marginBottom:12 }}>
+<div style={{ background:"white", borderRadius:18, overflow:"hidden", border:"2px solid #E0D8FF", boxShadow:"0 4px 20px rgba(100,80,200,.07)", marginBottom:12 }}>
               {SLOTS.map((slot,idx)=>{
                 const isMeal  = mealSlots.has(idx);
                 const stampId = isMeal?"meal":schedule[idx];

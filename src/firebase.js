@@ -12,10 +12,5 @@ const firebaseConfig = {
   measurementId: env("VITE_FIREBASE_MEASUREMENT_ID"),
 };
 
-console.log("[KidsApp] Firebase config:", {
-  apiKey: firebaseConfig.apiKey ? "set" : "MISSING",
-  projectId: firebaseConfig.projectId || "MISSING",
-});
 const app = initializeApp(firebaseConfig);
 export const db = getFirestore(app);
-console.log("[KidsApp] Firestore initialized:", !!db);
