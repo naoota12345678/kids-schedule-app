@@ -158,7 +158,7 @@ for (let h = 6; h < 24; h++)
 
 // ── Date helpers ───────────────────────────────────────────────────────────
 const toKey    = (d) => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
-const todayKey = toKey(new Date());
+const getTodayKey = () => toKey(new Date());
 const WD       = ["日","月","火","水","木","金","土"];
 const fmtDate  = (d) => `${d.getMonth()+1}月${d.getDate()}日（${WD[d.getDay()]}）`;
 const addDays  = (d,n) => { const r=new Date(d); r.setDate(r.getDate()+n); return r; };
@@ -411,7 +411,8 @@ export default function App() {
     );
   }
 
-  const [selectedKey,  setSelectedKey]  = useState(todayKey);
+  const todayKey = getTodayKey();
+  const [selectedKey,  setSelectedKey]  = useState(() => getTodayKey());
   const [showCalendar, setShowCalendar] = useState(false);
   const [viewMonth,    setViewMonth]    = useState({ y:new Date().getFullYear(), m:new Date().getMonth() });
   const [showMealSet,  setShowMealSet]  = useState(false);
