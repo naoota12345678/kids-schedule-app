@@ -411,7 +411,7 @@ export default function App() {
     );
   }
 
-  const todayKey = getTodayKey();
+  const [todayKey, setTodayKey] = useState(() => getTodayKey());
   const [selectedKey,  setSelectedKey]  = useState(() => getTodayKey());
   const [showCalendar, setShowCalendar] = useState(false);
   const [viewMonth,    setViewMonth]    = useState({ y:new Date().getFullYear(), m:new Date().getMonth() });
@@ -421,6 +421,26 @@ export default function App() {
   // For memo→schedule
   const [addingMemo,   setAddingMemo]   = useState(null); // memo id being scheduled
   const [memoStamp,    setMemoStamp]    = useState("study");
+
+  // ── Detect date change (midnight crossing / app resume) ─────────────────
+  useEffect(() => {
+    const check = () => {
+      const now = getTodayKey();
+      setTodayKey(prev => {
+        if (prev !== now) {
+          // Date changed — move selectedKey to new today if it was on the old today
+          setSelectedKey(sel => sel === prev ? now : sel);
+          return now;
+        }
+        return prev;
+      });
+    };
+    // Check every 30s and on visibility change (app resume from background)
+    const id = setInterval(check, 30_000);
+    const onVisible = () => { if (document.visibilityState === "visible") check(); };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => { clearInterval(id); document.removeEventListener("visibilitychange", onVisible); };
+  }, []);
 
   useNotifications(schedules, mealOverrides, defaultMeals);
 
